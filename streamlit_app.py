@@ -3,139 +3,153 @@ import streamlit as st
 import speech_recognition as sr
 from io import BytesIO
 from pydub import AudioSegment
-import json, base64, os
+import json
+import base64
 from gtts import gTTS
+import time
 
+# ======================
+# PAGE SETUP
+# ======================
 st.set_page_config(page_title="Trưng Vương Garden - Voice Assistant", layout="centered")
 
 st.markdown("<h2 style='text-align:center;'>CHÀO MỪNG BẠN ĐẾN TRƯNG VƯƠNG GARDEN</h2>", unsafe_allow_html=True)
-st.markdown("<h4 style='text-align:center;'>TRỢ LÝ A.I GIỌNG NÓI</h4>", unsafe_allow_html=True)
+st.markdown("<h4 style='text-align:center;'>TRỢ LÝ A.I BẰNG GIỌNG NÓI TVG</h4>", unsafe_allow_html=True)
 
-st.write("""
-**Hướng dẫn:**
-1) Nhấn **Phát lời chào**
-2) Nhấn **🎤 Bấm để ghi âm**
-3) Trợ lý tự trả lời bằng âm thanh
-4) Nhấn **Kết thúc**
+st.markdown("""
+**Hướng dẫn ngắn:**  
+1) Nhấn **Phát lời chào** để nghe giới thiệu.  
+2) Nhấn **Bấm để hỏi**, ghi âm câu hỏi (upload file audio).  
+3) Trợ lý trả lời bằng âm thanh.  
+4) Nhấn **Kết thúc** để chào tạm biệt.  
 """)
 
-# ====== LOAD FAQ ======
+
+# ======================
+# FAQ FINDER
+# ======================
 def find_answer(user_text):
     try:
         with open("faq_garden.json", encoding="utf-8") as f:
             faq_data = json.load(f)
-    except:
-        return "Xin lỗi, tôi không thể truy cập dữ liệu tư vấn."
+    except Exception:
+        return "Xin lỗi, hiện tại tôi không thể truy cập dữ liệu tư vấn."
 
     for item in faq_data.get("faq", []):
-        for kw in item.get("question", []):
-            if kw.lower() in user_text.lower():
+        for keyword in item.get("question", []):
+            if keyword.lower() in user_text.lower():
                 return item.get("answer", "")
-    return "Xin lỗi, tôi chưa hiểu câu hỏi của bạn."
 
-# ====== PHÁT ÂM THANH ======
-def play_audio_file(path):
-    audio_bytes = open(path, "rb").read()
-    b64 = base64.b64encode(audio_bytes).decode()
-    st.markdown(
-        f"""
-        <audio autoplay controls>
-            <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
-        </audio>
-        """,
-        unsafe_allow_html=True,
-    )
+    return ("Xin lỗi, tôi chưa hiểu câu hỏi của bạn. "
+            "Bạn có thể hỏi về giờ mở cửa, giá vé, trải nghiệm, ẩm thực, khuyến mãi hoặc liên hệ.")
 
-# ====== STT ======
-def transcribe(data):
-    audio = AudioSegment.from_file(BytesIO(data))
+
+# ======================
+# AUDIO PLAYER
+# ======================
+def play_audio_file(file_path):
+    try:
+        with open(file_path, "rb") as f:
+            audio_data = f.read()
+
+        b64 = base64.b64encode(audio_data).decode()
+        audio_html = f"""
+            <audio autoplay="true" controls>
+                <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
+            </audio>
+        """
+        st.markdown(audio_html, unsafe_allow_html=True)
+    except:
+        st.error("Không phát được file âm thanh.")
+
+
+# ======================
+# SAFE TTS (no gTTSError)
+# ======================
+def safe_tts(text, file_path):
+    for _ in range(3):    # thử 3 lần
+        try:
+            tts = gTTS(text=text, lang="vi")
+            tts.save(file_path)
+            return True
+        except:
+            time.sleep(1)
+    return False
+
+
+# ======================
+# SPEECH RECOGNITION
+# ======================
+def transcribe_audio(uploaded_file):
+    if uploaded_file is None:
+        return None
+
+    file_bytes = uploaded_file.read()
+
+    try:
+        audio = AudioSegment.from_file(BytesIO(file_bytes))
+        audio = audio.set_frame_rate(16000).set_channels(1)
+    except:
+        return "Tôi không thể xử lý file âm thanh bạn tải lên."
+
     wav_io = BytesIO()
     audio.export(wav_io, format="wav")
     wav_io.seek(0)
 
-    rec = sr.Recognizer()
-    with sr.AudioFile(wav_io) as src:
-        audio_data = rec.record(src)
-        try:
-            return rec.recognize_google(audio_data, language="vi-VN")
-        except:
-            return "Tôi không nghe rõ, bạn nói lại nhé."
+    recognizer = sr.Recognizer()
 
-# ====== GIAO DIỆN 3 CỘT ======
-col1, col2, col3 = st.columns([1,2,1])
+    try:
+        with sr.AudioFile(wav_io) as source:
+            audio_data = recognizer.record(source)
+            text = recognizer.recognize_google(audio_data, language='vi-VN')
+            return text
 
-# ====== BUTTON 1 ======
+    except sr.UnknownValueError:
+        return "Tôi không nghe rõ, bạn vui lòng nói lại nhé!"
+    except sr.RequestError:
+        return "Không kết nối được dịch vụ nhận dạng giọng nói."
+
+
+# ======================
+# UI – 3 COLUMNS
+# ======================
+col1, col2, col3 = st.columns([1, 1, 1])
+
+# STATE
+if 'stop' not in st.session_state:
+    st.session_state.stop = False
+
+# ---- PLAY INTRO ----
 with col1:
     if st.button("▶️ Phát lời chào"):
         play_audio_file("intro.mp3")
 
-# ====== BUTTON 2 — GHI ÂM MICRO ======
+# ---- ASK ----
 with col2:
-    st.markdown("### 🎤 Bấm để ghi âm câu hỏi")
+    uploaded_audio = st.file_uploader("🎤 Bấm để hỏi", type=["wav", "mp3", "m4a", "webm"])
 
-    audio_data = st.experimental_get_query_params().get("audio", [None])[0]
-
-    # Nút ghi âm bằng Javascript
-    st.markdown("""
-    <button id="recBtn" style="padding:10px 20px; font-size:18px;">🎤 Bấm để hỏi</button>
-
-    <script>
-    let recBtn = document.getElementById('recBtn');
-    let chunks = [];
-    let recorder;
-
-    recBtn.onclick = async function() {
-        let stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        recorder = new MediaRecorder(stream);
-
-        recorder.ondataavailable = e => chunks.push(e.data);
-
-        recorder.onstop = async () => {
-            let blob = new Blob(chunks, { type: 'audio/webm' });
-            let reader = new FileReader();
-
-            reader.onloadend = () => {
-                let base64Audio = reader.result.split(',')[1];
-                const query = new URLSearchParams(window.location.search);
-                query.set("audio", base64Audio);
-                window.location.search = query.toString();
-            };
-
-            reader.readAsDataURL(blob);
-        };
-
-        chunks = [];
-        recorder.start();
-        recBtn.innerText = "⏹ Dừng ghi";
-
-        setTimeout(() => {
-            recorder.stop();
-            recBtn.innerText = "🎤 Bấm để hỏi";
-        }, 3500); // Ghi 3.5 giây
-    };
-    </script>
-    """, unsafe_allow_html=True)
-
-    # Nếu có dữ liệu ghi âm
-    if audio_data not in [None, ""]:
-        audio_bytes = base64.b64decode(audio_data)
-        user_text = transcribe(audio_bytes)
+    if uploaded_audio is not None:
+        user_text = transcribe_audio(uploaded_audio)
         st.info(f"Bạn nói: {user_text}")
 
-        answer = find_answer(user_text)
-        st.success(f"Trợ lý: {answer}")
+        answer_text = find_answer(user_text)
+        st.success(f"Trợ lý trả lời: {answer_text}")
 
-        tts = gTTS(answer, lang="vi")
-        tts.save("answer.mp3")
-        play_audio_file("answer.mp3")
+        # TTS trả lời
+        if safe_tts(answer_text, "answer.mp3"):
+            play_audio_file("answer.mp3")
+        else:
+            st.error("Không tạo được âm thanh trả lời.")
 
-# ====== BUTTON 3 ======
+# ---- END ----
 with col3:
     if st.button("⏹ Kết thúc"):
-        farewell = "Cảm ơn bạn đã trải nghiệm Trợ lý A.I của Trưng Vương Garden!"
-        tts = gTTS(farewell, lang="vi")
-        tts.save("farewell.mp3")
-        st.success(farewell)
-        play_audio_file("farewell.mp3")
+        farewell_text = "Cảm ơn bạn đã sử dụng Trợ lý Trưng Vương Garden. Chào tạm biệt!"
 
-st.markdown("<p style='text-align:center; color: gray;'>Sản phẩm CLB Lập trình 7C</p>", unsafe_allow_html=True)
+        if safe_tts(farewell_text, "farewell.mp3"):
+            play_audio_file("farewell.mp3")
+
+        st.success(farewell_text)
+        st.session_state.stop = True
+
+st.markdown("<p style='text-align:center; color: gray;'>Sản phẩm do nhóm học sinh CLB Lập trình lớp 7C</p>", unsafe_allow_html=True)
